@@ -79,7 +79,7 @@ def test_resolve_remote_source_prefers_giphy_gif(monkeypatch):
 
 
 def test_collect_one_keeps_gif_extension_for_animated_remote(monkeypatch, tmp_path):
-    gif_bytes = b'GIF89a' + b'x' * 12000
+    gif_bytes = (b'GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!\xf9\x04\x00\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;') * 300
     gif_url = 'https://media1.giphy.com/media/abc123/giphy.gif'
     page_url = 'https://giphy.com/gifs/example-crab-abc123'
 
@@ -108,3 +108,26 @@ def test_collect_one_keeps_gif_extension_for_animated_remote(monkeypatch, tmp_pa
     assert result['name'].endswith('.gif')
     assert Path(result['path']).read_bytes().startswith(b'GIF89a')
     assert result['animated_preferred'] is True
+
+
+def test_collect_rejects_static_fallback_when_reference_looks_animated(monkeypatch, tmp_path):
+    page_url = 'https://example.com/crab.gif'
+    static_webp = b'RIFF' + (20).to_bytes(4, 'little') + b'WEBPVP8 ' + b'x' * 64
+
+    class Resp:
+        status_code = 200
+        text = ''
+        content = static_webp
+        headers = {'Content-Type': 'image/webp'}
+
+        def raise_for_status(self):
+            return None
+
+    def fake_get(url, headers=None, timeout=30):
+        return Resp()
+
+    monkeypatch.setattr(collect_stickers.requests, 'get', fake_get)
+    result = collect_stickers.collect_one((1, page_url), 'crab', tmp_path, 1)
+    assert result['status'] == 'static_fallback_rejected'
+    assert result['animation_reference'] is True
+    assert result['animated_detected'] is False

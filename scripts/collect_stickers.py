@@ -3,6 +3,7 @@
 from __future__ import annotations
 import argparse
 import hashlib
+import io
 import os
 import re
 import shutil
@@ -10,6 +11,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import requests
+from PIL import Image, ImageSequence
 
 from common import get_lang, SUPPORTED_EXTS, build_vision_plan
 
@@ -17,6 +19,7 @@ DEFAULT_TARGET_COUNT = 15
 DEFAULT_MIN_BYTES = 10 * 1024
 DEFAULT_WORKERS = 1
 DEFAULT_HEADERS = {'User-Agent': 'Mozilla/5.0', 'Referer': 'https://www.google.com/'}
+ANIMATED_CONTENT_TYPES = {'image/gif', 'video/mp4', 'video/webm'}
 
 
 def build_semantic_batch(final_items: list[dict], lang: str) -> dict:
@@ -54,11 +57,41 @@ def infer_extension(source: str, fallback: str = '.bin', content_type: str | Non
     return fallback
 
 
+def is_animated_bytes(data: bytes, content_type: str | None = None) -> bool:
+    content_type = (content_type or '').lower().split(';', 1)[0].strip()
+    if content_type in ANIMATED_CONTENT_TYPES:
+        return True
+    if data.startswith((b'GIF87a', b'GIF89a')):
+        try:
+            with Image.open(io.BytesIO(data)) as img:
+                return bool(getattr(img, 'is_animated', False) or getattr(img, 'n_frames', 1) > 1)
+        except Exception:
+            return True
+    if data[:4] == b'RIFF' and data[8:12] == b'WEBP':
+        try:
+            with Image.open(io.BytesIO(data)) as img:
+                return bool(getattr(img, 'is_animated', False) or getattr(img, 'n_frames', 1) > 1)
+        except Exception:
+            return b'ANIM' in data[:256]
+    return False
+
+
+def is_probably_animated_reference(source: str, content_type: str | None = None) -> bool:
+    lowered = source.lower()
+    ext = os.path.splitext(urlparse(lowered).path)[1]
+    if ext == '.gif':
+        return True
+    if ext in {'.mp4', '.webm'}:
+        return True
+    content_type = (content_type or '').lower().split(';', 1)[0].strip()
+    return content_type in ANIMATED_CONTENT_TYPES
+
+
 def resolve_remote_source(source: str) -> tuple[str, str | None, dict]:
     """Resolve remote pages to the best downloadable media URL.
 
-    Rule: if the original source is animated, prefer the animated asset (GIF) over
-    static previews such as WEBP/PNG thumbnails.
+    Generic rule: prefer animated assets whenever the reference or the fetched
+    resource indicates animation. Static previews are fallback-only.
     """
     meta = {'resolved_from': source, 'animated_preferred': False, 'resolver': 'direct'}
     if not (source.startswith('http://') or source.startswith('https://')):
@@ -130,8 +163,19 @@ def read_bytes(source: str) -> tuple[bytes, str | None, str, dict]:
         resolved_source, forced_ext, meta = resolve_remote_source(source)
         r = requests.get(resolved_source, headers=DEFAULT_HEADERS, timeout=30)
         r.raise_for_status()
-        return r.content, r.headers.get('Content-Type'), forced_ext or resolved_source, meta
-    return Path(source).read_bytes(), None, source, {'resolved_from': source, 'animated_preferred': False, 'resolver': 'local'}
+        content_type = r.headers.get('Content-Type')
+        meta['animated_detected'] = is_animated_bytes(r.content, content_type)
+        meta['animation_reference'] = is_probably_animated_reference(resolved_source, content_type)
+        return r.content, content_type, forced_ext or resolved_source, meta
+    data = Path(source).read_bytes()
+    meta = {
+        'resolved_from': source,
+        'animated_preferred': False,
+        'resolver': 'local',
+        'animated_detected': is_animated_bytes(data, None),
+        'animation_reference': is_probably_animated_reference(source, None),
+    }
+    return data, None, source, meta
 
 
 def collect_one(item: tuple[int, str], prefix: str, out_dir: Path, min_bytes: int) -> dict:
@@ -140,6 +184,18 @@ def collect_one(item: tuple[int, str], prefix: str, out_dir: Path, min_bytes: in
     size = len(data)
     if size < min_bytes:
         return {'source': source, 'status': 'low_quality', 'size': size, 'content_type': content_type, **meta}
+
+    animation_reference = bool(meta.get('animation_reference'))
+    animated_detected = bool(meta.get('animated_detected'))
+    if animation_reference and not animated_detected:
+        return {
+            'source': source,
+            'status': 'static_fallback_rejected',
+            'size': size,
+            'content_type': content_type,
+            **meta,
+        }
+
     ext = infer_extension(resolved_hint, '.gif', content_type)
     digest = hashlib.md5(data).hexdigest()
     name = f'{prefix}_{idx:02d}{ext}'
@@ -207,6 +263,7 @@ def main() -> int:
 
     keep, dropped = dedupe_saved(results)
     low_quality = [r for r in results if r.get('status') == 'low_quality']
+    static_fallback_rejected = [r for r in results if r.get('status') == 'static_fallback_rejected']
     kept_sorted = sorted(keep, key=lambda x: x['size'], reverse=True)
     final = kept_sorted[:args.target_count]
     extra = kept_sorted[args.target_count:]
@@ -217,6 +274,7 @@ def main() -> int:
     print(f'TARGET_COUNT={args.target_count}')
     print(f'SAVED_UNIQUE={len(keep)}')
     print(f'LOW_QUALITY={len(low_quality)}')
+    print(f'STATIC_FALLBACK_REJECTED={len(static_fallback_rejected)}')
     print(f'DUPLICATES={len(dropped)}')
     print(f'FINAL_COUNT={len(final)}')
     for item in final:

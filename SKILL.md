@@ -194,9 +194,11 @@ Default discovery is lightweight:
 - page discovery only counts successfully extracted image URLs
 
 Animation rule (mandatory):
-- If the source is originally animated (for example a GIPHY/Tenor GIF page), prefer downloading the animated asset itself.
-- Do **not** silently downgrade animated sources to static WEBP/PNG previews unless no animated asset is available.
-- Before sending or importing a GIF batch, verify the saved file is still animated-capable rather than a static preview.
+- If the source is originally animated, prefer downloading the animated asset itself.
+- Use a generic decision path: **file suffix → HTTP Content-Type → downloaded file content validation**.
+- Do **not** silently downgrade animated sources to static WEBP/PNG previews.
+- If a source looks animated by reference/content-type but the downloaded file validates as static, reject it from the animated batch instead of pretending it is a GIF.
+- Before sending or importing a GIF batch, verify the saved file is actually animated-capable rather than a static preview.
 
 ### 6. Auto-tagging and vision planning
 

@@ -87,7 +87,9 @@ python3 scripts/collect_stickers.py --sources-file ./sources.txt --out-dir ./sti
 Notes:
 - `--workers` is kept only for backward compatibility and is ignored unless set to `1`
 - exit code `2` means collection succeeded but did not reach `--target-count`, and the command prints `NEED_MORE=...`
-- If a remote source page represents an animated sticker/GIF (for example GIPHY page URLs), the collector should prefer the animated asset itself (`.gif`) instead of static preview files such as `.webp`/`.png`.
+- For animated sources, the collector follows a generic rule: **suffix → Content-Type → downloaded file validation**.
+- If a source appears animated, it should prefer the animated asset itself (`.gif` / animated file) instead of static preview files such as `.webp` / `.png`.
+- If the downloaded result validates as static while the source looked animated, the collector rejects that fallback instead of silently saving it as a fake GIF.
 
 ## Batch import (NEW)
 
