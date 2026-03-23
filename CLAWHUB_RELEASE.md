@@ -4,12 +4,12 @@ This file contains a ready-to-use release package for publishing `sticker-manage
 
 ## Recommended Version
 
-- `v0.2.1`
+- `v0.2.2`
 
 Reason:
-- fixes source discovery behavior so remote URLs are not implicitly fetched by default
-- fixes incorrect duplicate counts in batch import summaries and JSON output
-- aligns README / README.zh-CN / SKILL.md with actual runtime behavior
+- adds a generic animation-preservation rule for collected remote media
+- fixes animated sources (for example GIPHY pages) so they resolve to real GIF assets instead of static previews
+- rejects static fallback downloads when the source looked animated
 
 ## Listing Metadata
 
@@ -98,10 +98,11 @@ The skill is designed so the local inventory workflow remains fast and determini
 
 - Confirm `SKILL.md` is the uploaded skill definition
 - Confirm `README.md` and `README.zh-CN.md` match the current behavior
-- Use version `v0.2.1`
+- Use version `v0.2.2`
 - Include the MIT license from `LICENSE`
 - Mention that full vision execution depends on the outer model/tool layer
 - Do not claim remote URL verification is automatic unless `--fetch-urls` is exposed in the product UI
+- Mention that animated sources are preserved as animated assets when validation confirms animation
 
 ## Pre-Publish Verification
 
@@ -121,13 +122,13 @@ Current verified result:
 
 ## Release Notes Draft
 
-### v0.2.1
-
-Fixed:
-- remote URL discovery no longer performs implicit verification by default
-- failed page fetches are no longer counted as successful discovered sources
-- batch import duplicate counts are now reported correctly in summaries and JSON output
+### v0.2.2
 
 Changed:
-- aligned `README.md`, `README.zh-CN.md`, and `SKILL.md` with actual discovery behavior
+- collection now uses a generic animation-preservation rule: suffix → Content-Type → downloaded file validation
+- documented animation-preservation behavior in `README.md` and `SKILL.md`
+
+Fixed:
+- animated GIPHY page sources now resolve to real GIF assets instead of static preview files
+- static fallback downloads are rejected when the original source looked animated
 
