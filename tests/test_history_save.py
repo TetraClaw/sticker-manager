@@ -1,6 +1,7 @@
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -60,8 +61,15 @@ def test_save_history_empty_message(tmp_path):
 
 def test_save_auto_supports_history_index(tmp_path):
     inbound, library, env = make_env(tmp_path)
-    (inbound / 'first.gif').write_bytes(b'GIF89a' + b'a' * 100)
-    (inbound / 'second.gif').write_bytes(b'GIF89a' + b'b' * 6000)
+    first = inbound / 'first.gif'
+    second = inbound / 'second.gif'
+    first.write_bytes(b'GIF89a' + b'a' * 6000)
+    second.write_bytes(b'GIF89a' + b'b' * 7000)
+
+    now = time.time()
+    os.utime(first, (now - 10, now - 10))
+    os.utime(second, (now, now))
+
     result = run_script('save_sticker_auto.py', '--lang=en', '--history-index=2', 'history_auto', env=env)
     assert result.returncode == 0
     assert (library / 'history_auto.gif').exists()
