@@ -5,6 +5,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / 'scripts'
 PY = sys.executable
+sys.path.insert(0, str(SCRIPTS))
+import collect_stickers
 
 
 def run_collect(*args):
@@ -50,3 +52,59 @@ def test_collect_can_disable_semantic_plan(tmp_path):
     result = run_collect(str(source), '--out-dir', str(out_dir), '--prefix', '测试', '--target-count', '1', '--no-semantic-plan')
     assert result.returncode == 0
     assert '__SEMANTIC_BATCH__:' not in result.stdout
+
+
+def test_resolve_remote_source_prefers_giphy_gif(monkeypatch):
+    page_url = 'https://giphy.com/gifs/example-crab-abc123'
+    gif_url = 'https://media1.giphy.com/media/abc123/giphy.gif'
+    webp_url = 'https://media1.giphy.com/media/abc123/giphy.webp'
+
+    class Resp:
+        status_code = 200
+        text = f'<html><body>{webp_url} {gif_url}</body></html>'
+
+        def raise_for_status(self):
+            return None
+
+    def fake_get(url, headers=None, timeout=30):
+        assert url == page_url
+        return Resp()
+
+    monkeypatch.setattr(collect_stickers.requests, 'get', fake_get)
+    resolved, forced_ext, meta = collect_stickers.resolve_remote_source(page_url)
+    assert resolved == gif_url
+    assert forced_ext == '.gif'
+    assert meta['animated_preferred'] is True
+    assert meta['resolver'] == 'giphy-page'
+
+
+def test_collect_one_keeps_gif_extension_for_animated_remote(monkeypatch, tmp_path):
+    gif_bytes = b'GIF89a' + b'x' * 12000
+    gif_url = 'https://media1.giphy.com/media/abc123/giphy.gif'
+    page_url = 'https://giphy.com/gifs/example-crab-abc123'
+
+    class Resp:
+        def __init__(self, url):
+            self.url = url
+            self.status_code = 200
+            if url == page_url:
+                self.text = gif_url
+                self.content = b''
+                self.headers = {'Content-Type': 'text/html'}
+            else:
+                self.text = ''
+                self.content = gif_bytes
+                self.headers = {'Content-Type': 'image/gif'}
+
+        def raise_for_status(self):
+            return None
+
+    def fake_get(url, headers=None, timeout=30):
+        return Resp(url)
+
+    monkeypatch.setattr(collect_stickers.requests, 'get', fake_get)
+    result = collect_stickers.collect_one((1, page_url), 'crab', tmp_path, 10 * 1024)
+    assert result['status'] == 'saved'
+    assert result['name'].endswith('.gif')
+    assert Path(result['path']).read_bytes().startswith(b'GIF89a')
+    assert result['animated_preferred'] is True

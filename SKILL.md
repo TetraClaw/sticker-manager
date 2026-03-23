@@ -193,6 +193,11 @@ Default discovery is lightweight:
 - remote image URLs are returned as `pending` unless `--fetch-urls` is used
 - page discovery only counts successfully extracted image URLs
 
+Animation rule (mandatory):
+- If the source is originally animated (for example a GIPHY/Tenor GIF page), prefer downloading the animated asset itself.
+- Do **not** silently downgrade animated sources to static WEBP/PNG previews unless no animated asset is available.
+- Before sending or importing a GIF batch, verify the saved file is still animated-capable rather than a static preview.
+
 ### 6. Auto-tagging and vision planning
 
 Generate a vision plan for a single file:

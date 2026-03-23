@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import os
+import re
 import shutil
 from pathlib import Path
 from urllib.parse import urlparse
@@ -15,6 +16,7 @@ from common import get_lang, SUPPORTED_EXTS, build_vision_plan
 DEFAULT_TARGET_COUNT = 15
 DEFAULT_MIN_BYTES = 10 * 1024
 DEFAULT_WORKERS = 1
+DEFAULT_HEADERS = {'User-Agent': 'Mozilla/5.0', 'Referer': 'https://www.google.com/'}
 
 
 def build_semantic_batch(final_items: list[dict], lang: str) -> dict:
@@ -32,7 +34,7 @@ def build_semantic_batch(final_items: list[dict], lang: str) -> dict:
     }
 
 
-def infer_extension(source: str, fallback: str = '.bin') -> str:
+def infer_extension(source: str, fallback: str = '.bin', content_type: str | None = None) -> str:
     parsed = urlparse(source)
     ext = os.path.splitext(parsed.path)[1].lower()
     if ext in SUPPORTED_EXTS:
@@ -40,7 +42,77 @@ def infer_extension(source: str, fallback: str = '.bin') -> str:
     local_ext = os.path.splitext(source)[1].lower()
     if local_ext in SUPPORTED_EXTS:
         return local_ext
+    content_type = (content_type or '').lower()
+    if 'gif' in content_type:
+        return '.gif'
+    if 'webp' in content_type:
+        return '.webp'
+    if 'png' in content_type:
+        return '.png'
+    if 'jpeg' in content_type or 'jpg' in content_type:
+        return '.jpg'
     return fallback
+
+
+def resolve_remote_source(source: str) -> tuple[str, str | None, dict]:
+    """Resolve remote pages to the best downloadable media URL.
+
+    Rule: if the original source is animated, prefer the animated asset (GIF) over
+    static previews such as WEBP/PNG thumbnails.
+    """
+    meta = {'resolved_from': source, 'animated_preferred': False, 'resolver': 'direct'}
+    if not (source.startswith('http://') or source.startswith('https://')):
+        return source, None, meta
+
+    parsed = urlparse(source)
+    direct_ext = os.path.splitext(parsed.path)[1].lower()
+    if direct_ext in SUPPORTED_EXTS:
+        return source, None, meta
+
+    host = parsed.netloc.lower()
+    if 'giphy.com' not in host:
+        return source, None, meta
+
+    response = requests.get(source, headers=DEFAULT_HEADERS, timeout=30)
+    response.raise_for_status()
+    html = response.text
+
+    matches = re.findall(r'https://media\d*\.giphy\.com/(?:media|stickers)/[^"\'\s<]+', html)
+    normalized = []
+    for item in matches:
+        item = item.replace('\\u002F', '/').replace('\\/', '/')
+        if item not in normalized:
+            normalized.append(item)
+
+    def pick_variant(suffixes: list[str]) -> str | None:
+        for item in normalized:
+            for suffix in suffixes:
+                if item.endswith(suffix):
+                    return item
+        return None
+
+    gif_url = pick_variant(['giphy.gif'])
+    webp_url = pick_variant(['giphy.webp'])
+    png_url = pick_variant(['giphy.png'])
+
+    if gif_url:
+        meta['animated_preferred'] = True
+        meta['resolver'] = 'giphy-page'
+        return gif_url, '.gif', meta
+    if webp_url:
+        meta['resolver'] = 'giphy-page'
+        return webp_url, '.webp', meta
+    if png_url:
+        meta['resolver'] = 'giphy-page'
+        return png_url, '.png', meta
+
+    media_base = next((item for item in normalized if '/media/' in item or '/stickers/' in item), None)
+    if media_base:
+        meta['resolver'] = 'giphy-page'
+        meta['animated_preferred'] = True
+        return media_base.rstrip('/') + '/giphy.gif', '.gif', meta
+
+    return source, None, meta
 
 
 def load_sources(args_sources: list[str], sources_file: str | None) -> list[str]:
@@ -53,26 +125,36 @@ def load_sources(args_sources: list[str], sources_file: str | None) -> list[str]
     return values
 
 
-def read_bytes(source: str) -> bytes:
+def read_bytes(source: str) -> tuple[bytes, str | None, str, dict]:
     if source.startswith('http://') or source.startswith('https://'):
-        r = requests.get(source, headers={'User-Agent': 'Mozilla/5.0', 'Referer': 'https://www.google.com/'}, timeout=30)
+        resolved_source, forced_ext, meta = resolve_remote_source(source)
+        r = requests.get(resolved_source, headers=DEFAULT_HEADERS, timeout=30)
         r.raise_for_status()
-        return r.content
-    return Path(source).read_bytes()
+        return r.content, r.headers.get('Content-Type'), forced_ext or resolved_source, meta
+    return Path(source).read_bytes(), None, source, {'resolved_from': source, 'animated_preferred': False, 'resolver': 'local'}
 
 
 def collect_one(item: tuple[int, str], prefix: str, out_dir: Path, min_bytes: int) -> dict:
     idx, source = item
-    data = read_bytes(source)
+    data, content_type, resolved_hint, meta = read_bytes(source)
     size = len(data)
     if size < min_bytes:
-        return {'source': source, 'status': 'low_quality', 'size': size}
-    ext = infer_extension(source, '.gif')
+        return {'source': source, 'status': 'low_quality', 'size': size, 'content_type': content_type, **meta}
+    ext = infer_extension(resolved_hint, '.gif', content_type)
     digest = hashlib.md5(data).hexdigest()
     name = f'{prefix}_{idx:02d}{ext}'
     path = out_dir / name
     path.write_bytes(data)
-    return {'source': source, 'status': 'saved', 'size': size, 'hash': digest, 'path': str(path), 'name': name}
+    return {
+        'source': source,
+        'status': 'saved',
+        'size': size,
+        'hash': digest,
+        'path': str(path),
+        'name': name,
+        'content_type': content_type,
+        **meta,
+    }
 
 
 def dedupe_saved(results: list[dict]) -> tuple[list[dict], list[dict]]:
