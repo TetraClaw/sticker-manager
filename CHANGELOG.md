@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.3.0
+
+### Added
+- Generic animation-preservation rule for sticker collection
+- Support for animated GIPHY page sources resolving to real GIF assets
 
 ### Changed
 - `collect_stickers.py` now follows a generic animation-preservation rule: suffix → Content-Type → downloaded file validation
